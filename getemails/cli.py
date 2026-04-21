@@ -4,13 +4,13 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-
 import click
 import yaml
 from dotenv import load_dotenv
 
 from getemails.filters import FilterSpec
 from getemails.providers.base import AccountConfig, EmailProvider
+from getemails.local import filter_local
 from getemails.storage import query_folder_name, save_eml
 
 load_dotenv()
@@ -44,6 +44,17 @@ def _make_provider(account: AccountConfig) -> EmailProvider:
             raise ValueError(f"Unknown provider: {account.provider!r}")
 
 
+def _make_spec(since, until, senders, recipients, cc, bcc) -> FilterSpec:
+    return FilterSpec(
+        senders=list(senders),
+        recipients=list(recipients),
+        cc=list(cc),
+        bcc=list(bcc),
+        since=since.date() if since else None,
+        until=until.date() if until else None,
+    )
+
+
 def _run_account(
     account: AccountConfig, spec: FilterSpec, query_dir: Path
 ) -> tuple[str, int, int]:
@@ -64,6 +75,26 @@ def _run_account(
     return account.name, saved, skipped
 
 
+# --- shared options ----------------------------------------------------------
+
+def _filter_options(f):
+    f = click.option("--since", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
+                     help="Only include emails on or after this date.")(f)
+    f = click.option("--until", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
+                     help="Only include emails on or before this date.")(f)
+    f = click.option("--sender", "senders", multiple=True,
+                     help="Filter by sender address (repeatable).")(f)
+    f = click.option("--recipient", "recipients", multiple=True,
+                     help="Filter by recipient address (repeatable).")(f)
+    f = click.option("--cc", "cc", multiple=True,
+                     help="Filter by CC address (repeatable).")(f)
+    f = click.option("--bcc", "bcc", multiple=True,
+                     help="Filter by BCC address (repeatable).")(f)
+    return f
+
+
+# --- commands ----------------------------------------------------------------
+
 @click.group()
 def cli() -> None:
     pass
@@ -74,15 +105,8 @@ def cli() -> None:
               type=click.Path(exists=True), help="Path to accounts config.")
 @click.option("--account", "account_name", default=None,
               help="Run a single account by name.")
-@click.option("--since", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
-              help="Only fetch emails on or after this date.")
-@click.option("--until", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
-              help="Only fetch emails on or before this date.")
-@click.option("--sender", "senders", multiple=True,
-              help="Filter by sender address (repeatable).")
-@click.option("--recipient", "recipients", multiple=True,
-              help="Filter by recipient address (repeatable).")
-def fetch(config, account_name, since, until, senders, recipients):
+@_filter_options
+def fetch(config, account_name, since, until, senders, recipients, cc, bcc):
     """Download emails from configured accounts to .eml files."""
     accounts = _load_accounts(Path(config))
 
@@ -91,12 +115,7 @@ def fetch(config, account_name, since, until, senders, recipients):
         if not accounts:
             raise click.ClickException(f"No account named {account_name!r} in config.")
 
-    spec = FilterSpec(
-        senders=list(senders),
-        recipients=list(recipients),
-        since=since.date() if since else None,
-        until=until.date() if until else None,
-    )
+    spec = _make_spec(since, until, senders, recipients, cc, bcc)
 
     click.echo(f"Fetching {len(accounts)} account(s) in parallel...\n")
     query_dir = OUTPUT_DIR / query_folder_name(spec)
@@ -112,6 +131,25 @@ def fetch(config, account_name, since, until, senders, recipients):
             except Exception as exc:
                 click.echo(f"  {account.name}: ERROR — {exc}", err=True)
 
+    click.echo("\nDone.")
+
+
+@cli.command()
+@click.argument("input_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--recursive/--no-recursive", default=False, show_default=True,
+              help="Walk input_dir recursively.")
+@click.option("--output", "output_dir", default=None, type=click.Path(),
+              help="Output directory (default: output/<query>).")
+@_filter_options
+def local(input_dir, recursive, output_dir, since, until, senders, recipients, cc, bcc):
+    """Filter already-downloaded .eml files from INPUT_DIR into a new output directory."""
+    spec = _make_spec(since, until, senders, recipients, cc, bcc)
+
+    out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / query_folder_name(spec)
+    click.echo(f"Output directory: {out_dir}\n")
+
+    saved, skipped, filtered = filter_local(Path(input_dir), out_dir, spec, recursive)
+    click.echo(f"  {saved} saved, {skipped} skipped, {filtered} filtered out")
     click.echo("\nDone.")
 
 
