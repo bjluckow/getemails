@@ -135,20 +135,26 @@ def fetch(config, account_name, since, until, senders, recipients, cc, bcc):
 
 
 @cli.command()
-@click.argument("input_dir", type=click.Path(exists=True, file_okay=False))
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option("--mbox", "use_mbox", is_flag=True, default=False,
+              help="Treat INPUT_PATH as an .mbox file instead of a directory.")
 @click.option("--recursive/--no-recursive", default=False, show_default=True,
-              help="Walk input_dir recursively.")
+              help="Walk input directory recursively (ignored with --mbox).")
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
 @_filter_options
-def local(input_dir, recursive, output_dir, since, until, senders, recipients, cc, bcc):
-    """Filter already-downloaded .eml files from INPUT_DIR into a new output directory."""
-    spec = _make_spec(since, until, senders, recipients, cc, bcc)
+def local(input_path, use_mbox, recursive, output_dir, since, until, senders, recipients, cc, bcc):
+    """Filter .eml files or an .mbox file into a new output directory.
 
+    INPUT_PATH is either a directory of .eml files or an .mbox file (with --mbox).
+    """
+    spec = _make_spec(since, until, senders, recipients, cc, bcc)
     out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / query_folder_name(spec)
     click.echo(f"Output directory: {out_dir}\n")
 
-    saved, skipped, filtered = filter_local(Path(input_dir), out_dir, spec, recursive)
+    saved, skipped, filtered = filter_local(
+        Path(input_path), out_dir, spec, recursive=recursive, mbox=use_mbox
+    )
     click.echo(f"  {saved} saved, {skipped} skipped, {filtered} filtered out")
     click.echo("\nDone.")
 
@@ -173,13 +179,18 @@ def folders(config, account_name):
         try:
             with provider:
                 from getemails.providers.imap import IMAPProvider
+                from getemails.providers.gmail import GmailProvider
                 if isinstance(provider, IMAPProvider):
                     for folder in provider._list_folders():
                         click.echo(f"  {folder}")
+                elif isinstance(provider, GmailProvider):
+                    for label in provider.list_labels():
+                        click.echo(f"  {label}")
                 else:
                     click.echo("  (folder listing not supported for this provider)")
         except Exception as exc:
             click.echo(f"  ERROR — {exc}", err=True)
+
 
 
 def main() -> None:
