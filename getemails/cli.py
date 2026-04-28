@@ -90,6 +90,8 @@ def _filter_options(f):
                      help="Filter by CC address (repeatable).")(f)
     f = click.option("--bcc", "bcc", multiple=True,
                      help="Filter by BCC address (repeatable).")(f)
+    f = click.option("--any-address", "any_addresses", multiple=True,
+                 help="Match address in any field: from, to, cc, or bcc (repeatable).")(f)
     return f
 
 

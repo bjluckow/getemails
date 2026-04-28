@@ -147,6 +147,17 @@ def build_imap_criteria(spec: FilterSpec) -> list[object]:
         criteria += _or_criteria("FROM", spec.senders)
     if spec.recipients:
         criteria += _or_criteria("TO", spec.recipients)
+    if spec.cc:
+        criteria += _or_criteria("CC", spec.cc)
+    if spec.bcc:
+        criteria += _or_criteria("BCC", spec.bcc)
+    if spec.any_addresses:
+        for addr in spec.any_addresses:
+            criteria.append(
+                ["OR", ["FROM", addr],
+                ["OR", ["TO", addr],
+                ["OR", ["CC", addr], ["BCC", addr]]]]
+            )
 
     return criteria if criteria else ["ALL"]
 

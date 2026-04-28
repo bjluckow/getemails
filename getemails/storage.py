@@ -30,6 +30,9 @@ def query_folder_name(spec: FilterSpec) -> str:
     if spec.recipients:
         parts.append("to-" + "+".join(spec.recipients))
 
+    if spec.any_addresses:
+        parts.append("any-" + "+".join(spec.any_addresses))
+
     raw = "__".join(parts) if parts else "all"
     # Sanitize for filesystem safety
     return re.sub(r"[^\w@.+_-]", "-", raw)

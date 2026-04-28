@@ -1,4 +1,5 @@
 # credentials & secrets
+dev/
 .env
 config/accounts.yaml
 !config/accounts.example.yaml

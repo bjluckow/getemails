@@ -139,6 +139,12 @@ def _build_gmail_query(spec: FilterSpec) -> str:
     if spec.bcc:
         bcc_clause = " OR ".join(f"bcc:{b}" for b in spec.bcc)
         parts.append(f"({bcc_clause})" if len(spec.bcc) > 1 else bcc_clause)
+    if spec.any_addresses:
+        any_clause = " OR ".join(
+            f"(from:{a} OR to:{a} OR cc:{a} OR bcc:{a})"
+            for a in spec.any_addresses
+        )
+        parts.append(f"({any_clause})" if len(spec.any_addresses) > 1 else any_clause)
 
     return " ".join(parts)
 

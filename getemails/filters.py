@@ -12,13 +12,14 @@ class FilterSpec:
     recipients: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     bcc: list[str] = field(default_factory=list)
+    any_addresses: list[str] = field(default_factory=list)
     since: date | None = None
     until: date | None = None
 
     def is_empty(self) -> bool:
         return not any([
             self.senders, self.recipients, self.cc, self.bcc,
-            self.since, self.until,
+            self.any_addresses, self.since, self.until,
         ])
 
     def matches(self, msg: EmailMessage) -> bool:
@@ -45,6 +46,13 @@ class FilterSpec:
             return False
         if self.bcc and not _any_match(msg.get("Bcc", ""), self.bcc):
             return False
+        if self.any_addresses:
+            all_headers = " ".join([
+                msg.get("From", ""), msg.get("To", ""),
+                msg.get("Cc", ""), msg.get("Bcc", ""),
+            ])
+            if not _any_match(all_headers, self.any_addresses):
+                return False
 
         return True
 
