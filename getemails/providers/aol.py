@@ -4,6 +4,7 @@ import email
 import email.policy
 from datetime import date, timedelta
 from email.message import EmailMessage
+from typing import Iterator
 
 from getemails.filters import FilterSpec
 from getemails.providers.base import AccountConfig
@@ -23,12 +24,11 @@ class AOLProvider(IMAPProvider):
     HOST = "imap.aol.com"
     PORT = 993
 
-    def fetch_emails(self, spec: FilterSpec) -> list[EmailMessage]:
+    def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
         assert self._client, "Not connected — call connect() first"
 
         folders = self._list_folders()
         seen_mids: set[str] = set()
-        messages: list[EmailMessage] = []
 
         windows = _date_windows(
             since=spec.since or date(2000, 1, 1),
@@ -56,25 +56,14 @@ class AOLProvider(IMAPProvider):
             if not folder_uids:
                 continue
 
-            print(f"  {self.account.name}/{folder}: {len(folder_uids)} emails")
-
             for batch in uid_batches(folder_uids, AOL_FETCH_BATCH):
-                    response = self._client.fetch(batch, [b"RFC822"])
-                    for _uid, data in response.items():
-                        raw = data.get(b"RFC822")
-                        if not isinstance(raw, bytes):
-                            continue
-                        msg = email.message_from_bytes(
-                            raw, policy=email.policy.default
-                        )
-                        mid = msg.get("Message-ID", "")
-                        if mid and mid in seen_mids:
-                            continue
-                        if mid:
-                            seen_mids.add(mid)
-                        messages.append(msg)
-
-        return messages
+                for msg in self._fetch_batch(batch):
+                    mid = msg.get("Message-ID", "")
+                    if mid and mid in seen_mids:
+                        continue
+                    if mid:
+                        seen_mids.add(mid)
+                    yield folder, msg
 
 
 def _date_windows(

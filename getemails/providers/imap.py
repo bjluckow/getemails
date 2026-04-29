@@ -4,7 +4,7 @@ import email
 import email.policy
 from datetime import date
 from email.message import EmailMessage
-from typing import Generator
+from typing import Generator, Iterator
 
 from imapclient import IMAPClient
 
@@ -58,13 +58,12 @@ class IMAPProvider(EmailProvider):
         except Exception:
             return False
 
-    def fetch_emails(self, spec: FilterSpec) -> list[EmailMessage]:
+    def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
         assert self._client, "Not connected — call connect() first"
 
         folders = self._list_folders()
         criteria = build_imap_criteria(spec)
         seen_mids: set[str] = set()
-        messages: list[EmailMessage] = []
 
         for folder in folders:
             folder_info = self._client.select_folder(folder, readonly=True)
@@ -75,8 +74,6 @@ class IMAPProvider(EmailProvider):
             if not uids:
                 continue
 
-            print(f"  {self.account.name}/{folder}: {len(uids)} emails")
-
             for batch in uid_batches(uids, UID_BATCH_SIZE):
                 for msg in self._fetch_batch(batch):
                     mid = msg.get("Message-ID", "")
@@ -84,9 +81,7 @@ class IMAPProvider(EmailProvider):
                         continue
                     if mid:
                         seen_mids.add(mid)
-                    messages.append(msg)
-
-        return messages
+                    yield folder, msg
 
     def _fetch_batch(self, uids: list[int]) -> list[EmailMessage]:
         """

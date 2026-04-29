@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import email.policy
 from abc import ABC, abstractmethod
+from typing import Iterator
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 
@@ -34,12 +35,9 @@ class EmailProvider(ABC):
         """Close the connection cleanly."""
 
     @abstractmethod
-    def fetch_emails(self, spec: FilterSpec) -> list[EmailMessage]:
-        """
-        Return a list of EmailMessage objects matching spec.
-        Each message is a fully-parsed RFC 2822 message with
-        policy=email.policy.default so attachments are accessible
-        via msg.iter_attachments().
+    def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
+        """Yield (folder, msg) tuples matching spec one at a time.
+        folder is a human-readable label e.g. 'Inbox', 'Bulk', 'Gmail'.
         """
 
     @abstractmethod

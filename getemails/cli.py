@@ -10,10 +10,12 @@ import yaml
 from datetime import date, timezone
 
 
+from getemails.account import Account
 from getemails.filters import FilterSpec
 from getemails.providers.base import AccountConfig, EmailProvider
 from getemails.local import filter_local
 from getemails.storage import query_folder_name, save_eml
+from getemails.logger import ProgressLogger, log
 
 load_dotenv()
 
@@ -60,23 +62,13 @@ def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use
 
 
 def _run_account(
-    account: AccountConfig, spec: FilterSpec, query_dir: Path
+    config: AccountConfig, spec: FilterSpec,
+    query_dir: Path, logger: ProgressLogger
 ) -> tuple[str, int, int]:
-    provider = _make_provider(account)
-    out_dir = query_dir / account.name
-    saved = skipped = 0
-
-    with provider:
-        if not provider.health_check():
-            raise RuntimeError(f"Health check failed for {account.name!r}")
-        for msg in provider.fetch_emails(spec):
-            path = save_eml(msg, out_dir)
-            if path:
-                saved += 1
-            else:
-                skipped += 1
-
-    return account.name, saved, skipped
+    provider = _make_provider(config)
+    account = Account.create(config, provider, logger)
+    saved, skipped = account.fetch(spec, query_dir)
+    return config.name, saved, skipped
 
 
 # --- shared options ----------------------------------------------------------
@@ -113,8 +105,10 @@ def cli() -> None:
               type=click.Path(exists=True), help="Path to accounts config.")
 @click.option("--account", "account_name", default=None,
               help="Run a single account by name.")
+@click.option("--log-interval", default=30, show_default=True,
+              help="Seconds between progress updates.")
 @_filter_options
-def fetch(config, account_name, since, until, use_today, senders, recipients, cc, bcc):
+def fetch(config, account_name, log_interval, since, until, use_today, senders, recipients, cc, bcc):
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
     
@@ -132,15 +126,23 @@ def fetch(config, account_name, since, until, use_today, senders, recipients, cc
     query_dir = OUTPUT_DIR / query_folder_name(spec)
     click.echo(f"Output directory: {query_dir}\n")
 
+    progress_logger = ProgressLogger(interval=log_interval)
+    progress_logger.start()
+
     with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
-        futures = {pool.submit(_run_account, a, spec, query_dir): a for a in accounts}
+        futures = {
+            pool.submit(_run_account, a, spec, query_dir, progress_logger): a
+            for a in accounts
+        }
         for future in as_completed(futures):
             account = futures[future]
             try:
                 name, saved, skipped = future.result()
-                click.echo(f"  {name}: {saved} saved, {skipped} skipped")
+                log(name, f"Done — {saved} saved, {skipped} skipped")
             except Exception as exc:
-                click.echo(f"  {account.name}: ERROR — {exc}", err=True)
+                log(account.name, f"ERROR — {exc}")
+
+    progress_logger.stop()
 
     click.echo("\nDone.")
 

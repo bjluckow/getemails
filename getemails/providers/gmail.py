@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.message import EmailMessage
 from pathlib import Path
+from typing import Iterator
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -50,34 +51,20 @@ class GmailProvider(EmailProvider):
         result = self._service.users().labels().list(userId="me").execute()
         return sorted(label["name"] for label in result.get("labels", []))
 
-    def fetch_emails(self, spec: FilterSpec) -> list[EmailMessage]:
+    def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
         assert self._service, "Not connected — call connect() first"
 
         query = _build_gmail_query(spec)
-        print(f"  {self.account.name}: listing messages...")
         msg_ids = _list_all_message_ids(self._service, query)
         total = len(msg_ids)
-        print(f"  {self.account.name}: {total} messages found, fetching...")
-
-        messages: list[EmailMessage] = []
-        done = 0
         batches = list(_batched(msg_ids, 100))
         creds = self._service._http.credentials
 
         with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {
-                pool.submit(_fetch_batch_with_backoff, creds, b): b
-                for b in batches
-            }
+            futures = {pool.submit(_fetch_batch_with_backoff, creds, b): b for b in batches}
             for future in as_completed(futures):
-                messages.extend(future.result())
-                done += len(futures[future])
-                print(f"\r  {self.account.name}: {done}/{total}   ", end="", flush=True)
-
-        if total:
-            print()
-
-        return messages
+                for msg in future.result():
+                    yield "Gmail", msg
 
 
 # --- helpers -----------------------------------------------------------------
