@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import re
+import signal
+import sys
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import click
 import yaml
-from datetime import date, timezone
+from datetime import date, timedelta, timezone
 
 
 from getemails.account import Account
@@ -50,6 +52,7 @@ def _make_provider(account: AccountConfig) -> EmailProvider:
 
 def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use_today=False) -> FilterSpec:
     today = date.today()
+    tomorrow = today + timedelta(days=1)
     return FilterSpec(
         senders=list(senders),
         recipients=list(recipients),
@@ -57,7 +60,7 @@ def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use
         bcc=list(bcc),
         any_addresses=list(any_addresses),
         since=today if use_today else (since.date() if since else None),
-        until=today if use_today else (until.date() if until else None),
+        until=tomorrow if use_today else (until.date() if until else None),
     )
 
 
@@ -108,7 +111,7 @@ def cli() -> None:
 @click.option("--log-interval", default=30, show_default=True,
               help="Seconds between progress updates.")
 @_filter_options
-def fetch(config, account_name, log_interval, since, until, use_today, senders, recipients, cc, bcc):
+def fetch(config, account_name, log_interval, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
     
@@ -120,13 +123,22 @@ def fetch(config, account_name, log_interval, since, until, use_today, senders, 
         if not accounts:
             raise click.ClickException(f"No account named {account_name!r} in config.")
 
-    spec = _make_spec(since, until, senders, recipients, cc, bcc)
+    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
 
     click.echo(f"Fetching {len(accounts)} account(s) in parallel...\n")
     query_dir = OUTPUT_DIR / query_folder_name(spec)
     click.echo(f"Output directory: {query_dir}\n")
 
+   
+
     progress_logger = ProgressLogger(interval=log_interval)
+
+    def _handle_interrupt(sig, frame):
+        log("getemails", "Interrupted — saving progress and exiting...")
+        progress_logger.stop()
+        sys.exit(0)
+    signal.signal(signal.SIGINT, _handle_interrupt)
+
     progress_logger.start()
 
     with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
@@ -156,7 +168,7 @@ def fetch(config, account_name, log_interval, since, until, use_today, senders, 
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
 @_filter_options
-def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, senders, recipients, cc, bcc):
+def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
     """Filter .eml files or an .mbox file into a new output directory.
 
     INPUT_PATH is either a directory of .eml files or an .mbox file (with --mbox).
@@ -164,7 +176,7 @@ def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, 
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
     
-    spec = _make_spec(since, until, senders, recipients, cc, bcc)
+    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
     out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / query_folder_name(spec)
     click.echo(f"Output directory: {out_dir}\n")
 

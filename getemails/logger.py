@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import threading
 import time
 from dataclasses import dataclass, field
@@ -7,7 +8,7 @@ from dataclasses import dataclass, field
 from rich.console import Console
 from rich.text import Text
 
-console = Console(highlight=False)
+console = Console(highlight=False, force_terminal=True)
 
 # Docker-compose style colors — assigned round-robin per account
 ACCOUNT_COLORS = [
@@ -57,12 +58,13 @@ class AccountProgress:
 
     def print_status(self) -> None:
         color = get_account_color(self.account_name)
-        prefix = f"[bold {color}][{self.account_name}][/bold {color}]"
-        lines = [f"{prefix} Total: {self.done} processed"]
+        name = self.account_name.replace("[", "\\[")
+        prefix = f"[bold {color}][{name}][/bold {color}]"
+        ts = datetime.now().strftime("%H:%M:%S")
+        console.print(f"{prefix} [{ts}] Total: {self.done} processed")
         for fp in self.folders.values():
             if fp.done > 0:
-                lines.append(f"{prefix} Folder ({fp.name}): {fp.done} processed")
-        console.print("\n".join(lines))
+                console.print(f"{prefix} [{ts}] Folder ({fp.name}): {fp.done} processed")
 
 
 class ProgressLogger:
@@ -91,7 +93,6 @@ class ProgressLogger:
     def stop(self) -> None:
         self._stop.set()
         self._thread.join()
-        self._print_all()  # final summary
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):

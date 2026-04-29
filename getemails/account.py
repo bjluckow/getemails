@@ -24,16 +24,18 @@ class Account:
         saved = skipped = 0
         out_dir = output_dir / self.config.name
 
-        with self.provider:
-            if not self.provider.health_check():
-                raise RuntimeError(f"Health check failed for {self.config.name!r}")
-
-            for folder, msg in self.provider.fetch_emails(spec):
-                self.progress.increment(folder)
-                path = save_eml(msg, out_dir)
-                if path:
-                    saved += 1
-                else:
-                    skipped += 1
+        try:
+            with self.provider:
+                if not self.provider.health_check():
+                    raise RuntimeError(f"Health check failed for {self.config.name!r}")
+                for folder, msg in self.provider.fetch_emails(spec):
+                    self.progress.increment(folder)
+                    path = save_eml(msg, out_dir)
+                    if path:
+                        saved += 1
+                    else:
+                        skipped += 1
+        except KeyboardInterrupt:
+            pass  # already written to disk — exit cleanly
 
         return saved, skipped
