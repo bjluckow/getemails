@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import click
 import yaml
-from dotenv import load_dotenv
+from datetime import date, timezone
+
 
 from getemails.filters import FilterSpec
 from getemails.providers.base import AccountConfig, EmailProvider
@@ -44,14 +46,16 @@ def _make_provider(account: AccountConfig) -> EmailProvider:
             raise ValueError(f"Unknown provider: {account.provider!r}")
 
 
-def _make_spec(since, until, senders, recipients, cc, bcc) -> FilterSpec:
+def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use_today=False) -> FilterSpec:
+    today = date.today()
     return FilterSpec(
         senders=list(senders),
         recipients=list(recipients),
         cc=list(cc),
         bcc=list(bcc),
-        since=since.date() if since else None,
-        until=until.date() if until else None,
+        any_addresses=list(any_addresses),
+        since=today if use_today else (since.date() if since else None),
+        until=today if use_today else (until.date() if until else None),
     )
 
 
@@ -82,6 +86,8 @@ def _filter_options(f):
                      help="Only include emails on or after this date.")(f)
     f = click.option("--until", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
                      help="Only include emails on or before this date.")(f)
+    f = click.option("--today", "use_today", is_flag=True, default=False,
+                 help="Only include emails from today (local timezone). Cannot be used with --since or --until.")(f)
     f = click.option("--sender", "senders", multiple=True,
                      help="Filter by sender address (repeatable).")(f)
     f = click.option("--recipient", "recipients", multiple=True,
@@ -108,7 +114,10 @@ def cli() -> None:
 @click.option("--account", "account_name", default=None,
               help="Run a single account by name.")
 @_filter_options
-def fetch(config, account_name, since, until, senders, recipients, cc, bcc):
+def fetch(config, account_name, since, until, use_today, senders, recipients, cc, bcc):
+    if use_today and (since or until):
+        raise click.UsageError("--today cannot be combined with --since or --until.")
+    
     """Download emails from configured accounts to .eml files."""
     accounts = _load_accounts(Path(config))
 
@@ -145,11 +154,14 @@ def fetch(config, account_name, since, until, senders, recipients, cc, bcc):
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
 @_filter_options
-def local(input_path, use_mbox, recursive, output_dir, since, until, senders, recipients, cc, bcc):
+def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, senders, recipients, cc, bcc):
     """Filter .eml files or an .mbox file into a new output directory.
 
     INPUT_PATH is either a directory of .eml files or an .mbox file (with --mbox).
     """
+    if use_today and (since or until):
+        raise click.UsageError("--today cannot be combined with --since or --until.")
+    
     spec = _make_spec(since, until, senders, recipients, cc, bcc)
     out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / query_folder_name(spec)
     click.echo(f"Output directory: {out_dir}\n")
