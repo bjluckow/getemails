@@ -6,7 +6,7 @@ from pathlib import Path
 from getemails.filters import FilterSpec
 from getemails.logger import AccountProgress, ProgressLogger, log
 from getemails.providers.base import AccountConfig, EmailProvider
-from getemails.storage import save_eml
+from getemails.storage import GroupBy, save_eml
 
 
 @dataclass
@@ -20,7 +20,7 @@ class Account:
         progress = logger.register(config.name)
         return cls(config=config, provider=provider, progress=progress)
 
-    def fetch(self, spec: FilterSpec, output_dir: Path) -> tuple[int, int]:
+    def fetch(self, spec: FilterSpec, output_dir: Path, group_by: GroupBy | None = None) -> tuple[int, int]:
         saved = skipped = 0
         out_dir = output_dir / self.config.name
 
@@ -30,7 +30,7 @@ class Account:
                     raise RuntimeError(f"Health check failed for {self.config.name!r}")
                 for folder, msg in self.provider.fetch_emails(spec):
                     self.progress.increment(folder)
-                    path = save_eml(msg, out_dir)
+                    path = save_eml(msg, out_dir, group_by=group_by)
                     if path:
                         saved += 1
                     else:

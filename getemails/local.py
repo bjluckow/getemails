@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from getemails.filters import FilterSpec
-from getemails.storage import save_eml
+from getemails.storage import GroupBy, save_eml
 
 
 def stream_emls(input_dir: Path, recursive: bool) -> Iterator[EmailMessage]:
@@ -37,6 +37,7 @@ def filter_local(
     spec: FilterSpec,
     recursive: bool = False,
     mbox: bool = False,
+    group_by: GroupBy | None = None,
 ) -> tuple[int, int, int]:
     """
     Stream messages from input_path, apply spec, write matches to output_dir.
@@ -51,7 +52,7 @@ def filter_local(
         if not spec.is_empty() and not spec.matches(msg):
             filtered += 1
             continue
-        path = save_eml(msg, output_dir)
+        path = save_eml(msg, output_dir, group_by=group_by)
         if path:
             saved += 1
         else:

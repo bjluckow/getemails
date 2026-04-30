@@ -16,7 +16,7 @@ from getemails.account import Account
 from getemails.filters import FilterSpec
 from getemails.providers.base import AccountConfig, EmailProvider
 from getemails.local import filter_local
-from getemails.storage import query_folder_name, save_eml
+from getemails.storage import GroupBy, query_folder_name, save_eml
 from getemails.logger import ProgressLogger, log
 
 load_dotenv()
@@ -66,11 +66,12 @@ def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use
 
 def _run_account(
     config: AccountConfig, spec: FilterSpec,
-    query_dir: Path, logger: ProgressLogger
+    query_dir: Path, logger: ProgressLogger,
+    group_by: GroupBy | None = None,
 ) -> tuple[str, int, int]:
     provider = _make_provider(config)
     account = Account.create(config, provider, logger)
-    saved, skipped = account.fetch(spec, query_dir)
+    saved, skipped = account.fetch(spec, query_dir, group_by=group_by)
     return config.name, saved, skipped
 
 
@@ -110,8 +111,16 @@ def cli() -> None:
               help="Run a single account by name.")
 @click.option("--log-interval", default=30, show_default=True,
               help="Seconds between progress updates.")
+@click.option("--output", "output_name", default=None,
+              help="Output directory name (overrides auto-generated name).")
+@click.option("--group-by-date", is_flag=True, default=False,
+              help="Group emails into subdirectories by date (YYYY-MM-DD).")
+@click.option("--group-by-thread", is_flag=True, default=False,
+              help="Group emails into subdirectories by thread subject.")
 @_filter_options
-def fetch(config, account_name, log_interval, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
+def fetch(config, account_name, log_interval, output_name, 
+          group_by_date, group_by_thread, since, until, use_today, 
+          senders, recipients, cc, bcc, any_addresses):
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
     
@@ -126,10 +135,10 @@ def fetch(config, account_name, log_interval, since, until, use_today, senders, 
     spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
 
     click.echo(f"Fetching {len(accounts)} account(s) in parallel...\n")
-    query_dir = OUTPUT_DIR / query_folder_name(spec)
+    group_by = GroupBy(date=group_by_date, thread=group_by_thread)
+    query_dir = OUTPUT_DIR / (output_name if output_name else query_folder_name(spec))
     click.echo(f"Output directory: {query_dir}\n")
 
-   
 
     progress_logger = ProgressLogger(interval=log_interval)
 
@@ -143,7 +152,7 @@ def fetch(config, account_name, log_interval, since, until, use_today, senders, 
 
     with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
         futures = {
-            pool.submit(_run_account, a, spec, query_dir, progress_logger): a
+            pool.submit(_run_account, a, spec, query_dir, progress_logger, group_by): a
             for a in accounts
         }
         for future in as_completed(futures):
@@ -167,8 +176,13 @@ def fetch(config, account_name, log_interval, since, until, use_today, senders, 
               help="Walk input directory recursively (ignored with --mbox).")
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
+@click.option("--group-by-date", is_flag=True, default=False,
+              help="Group emails into subdirectories by date (YYYY-MM-DD).")
+@click.option("--group-by-thread", is_flag=True, default=False,
+              help="Group emails into subdirectories by thread subject.")
 @_filter_options
-def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
+def local(input_path, use_mbox, recursive, output_dir, group_by_date, group_by_thread, 
+          since, until, use_today, senders, recipients, cc, bcc, any_addresses):
     """Filter .eml files or an .mbox file into a new output directory.
 
     INPUT_PATH is either a directory of .eml files or an .mbox file (with --mbox).
@@ -181,7 +195,7 @@ def local(input_path, use_mbox, recursive, output_dir, since, until, use_today, 
     click.echo(f"Output directory: {out_dir}\n")
 
     saved, skipped, filtered = filter_local(
-        Path(input_path), out_dir, spec, recursive=recursive, mbox=use_mbox
+        Path(input_path), out_dir, spec, recursive=recursive, mbox=use_mbox, group_by=GroupBy(date=group_by_date, thread=group_by_thread)
     )
     click.echo(f"  {saved} saved, {skipped} skipped, {filtered} filtered out")
     click.echo("\nDone.")
