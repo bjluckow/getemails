@@ -1,6 +1,5 @@
 from __future__ import annotations
  
-from getemails.providers.base import AccountConfig
 from getemails.providers.imap import IMAPProvider
  
  

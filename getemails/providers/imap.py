@@ -8,8 +8,9 @@ from typing import Generator, Iterator
 
 from imapclient import IMAPClient
 
+from getemails.config import AccountConfig
 from getemails.filters import FilterSpec
-from getemails.providers.base import AccountConfig, EmailProvider
+from getemails.providers.base import EmailProvider
 
 UID_BATCH_SIZE = 500
 
@@ -57,6 +58,10 @@ class IMAPProvider(EmailProvider):
             return True
         except Exception:
             return False
+        
+    def get_address(self) -> str:
+        assert self.account.username
+        return self.account.username
 
     def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
         assert self._client, "Not connected — call connect() first"

@@ -7,7 +7,6 @@ from email.message import EmailMessage
 from typing import Iterator
 
 from getemails.filters import FilterSpec
-from getemails.providers.base import AccountConfig
 from getemails.providers.imap import IMAPProvider, build_imap_criteria, uid_batches
 
 # AOL/Yahoo enforce MESSAGELIMIT=500 per SEARCH command.

@@ -1,53 +1,21 @@
 from __future__ import annotations
 
-import os
 import re
 import signal
 import sys
-from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, timedelta
 from pathlib import Path
+
 import click
-import yaml
-from datetime import date, timedelta, timezone
 
-
-from getemails.account import Account
+from getemails.config import Config, DEFAULT_CONFIG_PATH
+from getemails.db import init_db, insert_from_stream, get_stats, delete_messages
+from getemails.email_utils import stream_emls, stream_mbox
+from getemails.fetch import fetch_all, fetch_folders
 from getemails.filters import FilterSpec
-from getemails.providers.base import AccountConfig, EmailProvider
-from getemails.local import filter_local
-from getemails.storage import GroupBy, query_folder_name, save_eml
+from getemails.writer import write_emls
 from getemails.logger import ProgressLogger, log
-
-load_dotenv()
-
-OUTPUT_DIR = Path("output")
-
-
-def _load_accounts(config_path: Path) -> list[AccountConfig]:
-    raw = config_path.read_text()
-    raw = re.sub(
-        r"\$\{(\w+)\}",
-        lambda m: os.environ.get(m.group(1), ""),
-        raw,
-    )
-    data = yaml.safe_load(raw)
-    return [AccountConfig(**a) for a in data["accounts"]]
-
-
-def _make_provider(account: AccountConfig) -> EmailProvider:
-    match account.provider:
-        case "gmail":
-            from getemails.providers.gmail import GmailProvider
-            return GmailProvider(account)
-        case "icloud":
-            from getemails.providers.icloud import iCloudProvider
-            return iCloudProvider(account)
-        case "aol":
-            from getemails.providers.aol import AOLProvider
-            return AOLProvider(account)
-        case _:
-            raise ValueError(f"Unknown provider: {account.provider!r}")
+from getemails.sorting import SortingSpec
 
 
 def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use_today=False) -> FilterSpec:
@@ -63,16 +31,28 @@ def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use
         until=tomorrow if use_today else (until.date() if until else None),
     )
 
+def _build_folder_name(spec: FilterSpec) -> str:
+    """Build a human-readable output folder name from a FilterSpec."""
+    parts: list[str] = []
 
-def _run_account(
-    config: AccountConfig, spec: FilterSpec,
-    query_dir: Path, logger: ProgressLogger,
-    group_by: GroupBy | None = None,
-) -> tuple[str, int, int]:
-    provider = _make_provider(config)
-    account = Account.create(config, provider, logger)
-    saved, skipped = account.fetch(spec, query_dir, group_by=group_by)
-    return config.name, saved, skipped
+    if spec.since or spec.until:
+        since = spec.since.strftime("%Y-%m-%d") if spec.since else "oldest"
+        until = spec.until.strftime("%Y-%m-%d") if spec.until else date.today().strftime("%Y-%m-%d")
+        parts.append(f"{since}_{until}")
+
+    if spec.senders:
+        parts.append("from-" + "+".join(spec.senders))
+    if spec.recipients:
+        parts.append("to-" + "+".join(spec.recipients))
+    if spec.cc:
+        parts.append("cc-" + "+".join(spec.cc))
+    if spec.bcc:
+        parts.append("bcc-" + "+".join(spec.bcc))
+    if spec.any_addresses:
+        parts.append("any-" + "+".join(spec.any_addresses))
+
+    raw = "__".join(parts) if parts else "all"
+    return re.sub(r"[^\w@.+_-]", "-", raw)
 
 
 # --- shared options ----------------------------------------------------------
@@ -83,7 +63,7 @@ def _filter_options(f):
     f = click.option("--until", default=None, type=click.DateTime(formats=["%Y-%m-%d"]),
                      help="Only include emails on or before this date.")(f)
     f = click.option("--today", "use_today", is_flag=True, default=False,
-                 help="Only include emails from today (local timezone). Cannot be used with --since or --until.")(f)
+                     help="Only include emails from today (local timezone). Cannot be used with --since or --until.")(f)
     f = click.option("--sender", "senders", multiple=True,
                      help="Filter by sender address (repeatable).")(f)
     f = click.option("--recipient", "recipients", multiple=True,
@@ -92,8 +72,18 @@ def _filter_options(f):
                      help="Filter by CC address (repeatable).")(f)
     f = click.option("--bcc", "bcc", multiple=True,
                      help="Filter by BCC address (repeatable).")(f)
-    f = click.option("--any-address", "any_addresses", multiple=True,
-                 help="Match address in any field: from, to, cc, or bcc (repeatable).")(f)
+    f = click.option("--any", "any_addresses", multiple=True,
+                     help="Match address in any field: from, to, cc, or bcc (repeatable).")(f)
+    return f
+
+
+def _sorting_options(f):
+    f = click.option("--group-by-date", is_flag=True, default=False,
+                     help="Group emails into subdirectories by date (YYYY-MM-DD).")(f)
+    f = click.option("--group-by-folder", is_flag=True, default=False,
+                     help="Group emails into subdirectories by source folder.")(f)
+    f = click.option("--group-by-thread", is_flag=True, default=False, 
+                     help="Group emails into subdirectories by thread subject.")(f)
     return f
 
 
@@ -104,84 +94,87 @@ def cli() -> None:
     pass
 
 
-@cli.command()
-@click.option("--config", default="config/accounts.yaml", show_default=True,
+@cli.command(name="fetch")
+@click.option("--config", "config_path", default="config/accounts.yaml", show_default=True,
               type=click.Path(exists=True), help="Path to accounts config.")
-@click.option("--account", "account_name", default=None,
-              help="Run a single account by name.")
+@click.option("--account", "account_names", multiple=True,
+              help="Account name to fetch (repeatable). Defaults to all accounts.")
 @click.option("--log-interval", default=30, show_default=True,
               help="Seconds between progress updates.")
-@click.option("--output", "output_name", default=None,
-              help="Output directory name (overrides auto-generated name).")
-@click.option("--group-by-date", is_flag=True, default=False,
-              help="Group emails into subdirectories by date (YYYY-MM-DD).")
-@click.option("--group-by-thread", is_flag=True, default=False,
-              help="Group emails into subdirectories by thread subject.")
 @_filter_options
-def fetch(config, account_name, log_interval, output_name, 
-          group_by_date, group_by_thread, since, until, use_today, 
-          senders, recipients, cc, bcc, any_addresses):
+def fetch(config_path, account_names, log_interval,
+          since, until, use_today, senders, recipients, cc, bcc, any_addresses):
+    """Download emails from configured accounts to .eml files."""
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
-    
-    """Download emails from configured accounts to .eml files."""
-    accounts = _load_accounts(Path(config))
 
-    if account_name:
-        accounts = [a for a in accounts if a.name == account_name]
-        if not accounts:
-            raise click.ClickException(f"No account named {account_name!r} in config.")
+    cfg = Config.load(config_path=config_path)
+
+    if account_names:
+        accounts = [a for a in cfg.accounts if a.name in account_names]
+        missing = set(account_names) - {a.name for a in accounts}
+        if missing:
+            raise click.ClickException(f"No account(s) named {', '.join(missing)!r} in config.")
+    else:
+        accounts = cfg.accounts
 
     spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
 
     click.echo(f"Fetching {len(accounts)} account(s) in parallel...\n")
-    group_by = GroupBy(date=group_by_date, thread=group_by_thread)
-    query_dir = OUTPUT_DIR / (output_name if output_name else query_folder_name(spec))
-    click.echo(f"Output directory: {query_dir}\n")
-
+    click.echo(f"Database: {cfg.db_path.resolve()}\n")
 
     progress_logger = ProgressLogger(interval=log_interval)
 
     def _handle_interrupt(sig, frame):
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         log("getemails", "Interrupted — saving progress and exiting...")
         progress_logger.stop()
         sys.exit(0)
+
     signal.signal(signal.SIGINT, _handle_interrupt)
-
     progress_logger.start()
-
-    with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
-        futures = {
-            pool.submit(_run_account, a, spec, query_dir, progress_logger, group_by): a
-            for a in accounts
-        }
-        for future in as_completed(futures):
-            account = futures[future]
-            try:
-                name, saved, skipped = future.result()
-                log(name, f"Done — {saved} saved, {skipped} skipped")
-            except Exception as exc:
-                log(account.name, f"ERROR — {exc}")
-
+    fetch_all(accounts, spec, db_path=cfg.db_path, logger=progress_logger)
     progress_logger.stop()
 
     click.echo("\nDone.")
 
 
-@cli.command()
-@click.argument("input_path", type=click.Path(exists=True))
-@click.option("--mbox", "use_mbox", is_flag=True, default=False,
-              help="Treat INPUT_PATH as an .mbox file instead of a directory.")
-@click.option("--recursive/--no-recursive", default=False, show_default=True,
-              help="Walk input directory recursively (ignored with --mbox).")
+
+@cli.command(name="folders")
+@click.option("--config", "config_path", default="config/accounts.yaml", show_default=True,
+              type=click.Path(exists=True), help="Path to accounts config.")
+@click.option("--account", "account_names", multiple=True, help="Show folders for a single account by name.")
+def folders(config_path, account_names):
+    """List all folders for configured accounts."""
+    cfg = Config.load(config_path=config_path)
+
+    if account_names:
+        accounts = [a for a in cfg.accounts if a.name in account_names]
+        missing = set(account_names) - {a.name for a in accounts}
+        if missing:
+            raise click.ClickException(f"No account(s) named {', '.join(missing)!r} in config.")
+    else:
+        accounts = cfg.accounts
+
+    for account in accounts:
+        click.echo(f"\n{account.name}:")
+        try:
+            for folder in fetch_folders(account):
+                click.echo(f"  {folder}")
+        except Exception as exc:
+            click.echo(f"  ERROR — {exc}", err=True)
+
+
+@cli.command(name="local")
+@click.argument("input_path", type=click.Path(exists=True), required=False, default=None)
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
+              type=click.Path(exists=True), help="Path to accounts config.")
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
-@click.option("--group-by-date", is_flag=True, default=False,
-              help="Group emails into subdirectories by date (YYYY-MM-DD).")
-@click.option("--group-by-thread", is_flag=True, default=False,
-              help="Group emails into subdirectories by thread subject.")
+@_sorting_options
 @_filter_options
-def local(input_path, use_mbox, recursive, output_dir, group_by_date, group_by_thread, 
+def local(input_path, config_path, output_dir, 
+          group_by_date, group_by_folder,group_by_thread,
           since, until, use_today, senders, recipients, cc, bcc, any_addresses):
     """Filter .eml files or an .mbox file into a new output directory.
 
@@ -190,49 +183,140 @@ def local(input_path, use_mbox, recursive, output_dir, group_by_date, group_by_t
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
     
-    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
-    out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / query_folder_name(spec)
+    cfg = Config.load(config_path=config_path)
+
+    # only use input_path if explicitly provided (e.g. for mbox)
+    resolved_input = Path(input_path) if input_path else cfg.db_path.parent
+
+    filter_spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
+    out_dir = Path(output_dir) if output_dir else cfg.output_dir / _build_folder_name(filter_spec)
+    sorting_spec = SortingSpec(
+        groupby_date=group_by_date,
+        groupby_folder=group_by_folder,
+        groupby_thread=group_by_thread,
+    )
+
     click.echo(f"Output directory: {out_dir}\n")
 
-    saved, skipped, filtered = filter_local(
-        Path(input_path), out_dir, spec, recursive=recursive, mbox=use_mbox, group_by=GroupBy(date=group_by_date, thread=group_by_thread)
+    saved, skipped = write_emls(resolved_input, out_dir, 
+        filter_spec=filter_spec, sorting_spec=sorting_spec, 
     )
-    click.echo(f"  {saved} saved, {skipped} skipped, {filtered} filtered out")
+    click.echo(f"  {saved} saved, {skipped} skipped")
     click.echo("\nDone.")
 
 
-@cli.command()
-@click.option("--config", default="config/accounts.yaml", show_default=True,
+@cli.command(name="import")
+@click.argument("input_path", type=click.Path(exists=True))
+@click.argument("account")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
               type=click.Path(exists=True), help="Path to accounts config.")
-@click.option("--account", "account_name", default=None,
-              help="Show folders for a single account by name.")
-def folders(config, account_name):
-    """List all folders for configured accounts."""
-    accounts = _load_accounts(Path(config))
+@click.option("--folder", "import_folder", default="inbox",
+              help="Folder label for imported messages.")
+@click.option("--recursive/--no-recursive", default=False, show_default=True,
+              help="Walk INPUT_PATH recursively when importing a directory.")
+@_filter_options
+def import_cmd(input_path, account, config_path, import_folder, recursive,
+               since, until, use_today, senders, recipients, cc, bcc, any_addresses):
+    """Import an .mbox file or directory of .eml files into the database.
 
-    if account_name:
-        accounts = [a for a in accounts if a.name == account_name]
-        if not accounts:
-            raise click.ClickException(f"No account named {account_name!r} in config.")
+    ACCOUNT is the email address to associate with imported messages.
+    INPUT_PATH is either an .mbox file or a directory of .eml files.
+    """
+    if use_today and (since or until):
+        raise click.UsageError("--today cannot be combined with --since or --until.")
 
-    for account in accounts:
-        provider = _make_provider(account)
-        click.echo(f"\n{account.name}:")
-        try:
-            with provider:
-                from getemails.providers.imap import IMAPProvider
-                from getemails.providers.gmail import GmailProvider
-                if isinstance(provider, IMAPProvider):
-                    for folder in provider._list_folders():
-                        click.echo(f"  {folder}")
-                elif isinstance(provider, GmailProvider):
-                    for label in provider.list_labels():
-                        click.echo(f"  {label}")
-                else:
-                    click.echo("  (folder listing not supported for this provider)")
-        except Exception as exc:
-            click.echo(f"  ERROR — {exc}", err=True)
+    cfg = Config.load(config_path=config_path)
+    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
+    path = Path(input_path)
+    source = stream_mbox(path) if path.is_file() else stream_emls(path, recursive=recursive)
 
+    conn = init_db(cfg.db_path)
+    inserted, filtered = insert_from_stream(conn, source, account, import_folder, spec)
+    conn.close()
+
+    click.echo(f"  {inserted} imported, {filtered} filtered out")
+    click.echo(f"  Database: {cfg.db_path.resolve()}")
+    click.echo("\nImport complete.")
+
+
+@cli.command(name="stats")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
+              type=click.Path(exists=True), help="Path to accounts config.")
+def stats(config_path):
+    """Show database stats and email counts per account and folder."""
+    cfg = Config.load(config_path=config_path)
+
+    click.echo(f"Config:   {cfg.cfg_path.resolve()}")
+    click.echo(f"Database: {cfg.db_path.resolve()}")
+
+    if not cfg.db_path.exists():
+        click.echo("\nNo database found — run `getemails fetch` first.")
+        return
+
+    conn = init_db(cfg.db_path)
+    account_stats = get_stats(conn)
+    conn.close()
+
+    if not account_stats:
+        click.echo("\nDatabase is empty.")
+        return
+
+    header = f"\n{'Address':<40} {'Emails':>8}  {'Earliest':<12}  {'Latest':<12}"
+    click.echo(header)
+    click.echo("-" * 78)
+
+    total = 0
+    for stat in account_stats:
+        click.echo(
+            f"{stat.account:<40} {stat.count:>8}  "
+            f"{stat.earliest or '?':<12}  {stat.latest or '?':<12}"
+        )
+        for f in stat.folders:
+            label = "  " + f.folder
+            click.echo(
+                f"{label:<40} {f.count:>8}  "
+                f"{f.earliest or '?':<12}  {f.latest or '?':<12}"
+            )
+        total += stat.count
+
+    click.echo("-" * 78)
+    click.echo(f"{'Total':<40} {total:>8}")
+
+@cli.command()
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
+              type=click.Path(exists=True), help="Path to accounts config.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip confirmation prompt.")
+@_filter_options
+def clean(config_path, yes, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
+    """Remove emails from the database matching the given filters."""
+    if use_today and (since or until):
+        raise click.UsageError("--today cannot be combined with --since or --until.")
+
+    cfg = Config.load(config_path=config_path)
+
+    if not cfg.db_path.exists():
+        click.echo("No database found.")
+        return
+
+    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
+
+    if spec.is_empty() and not yes:
+        raise click.UsageError(
+            "No filters provided — this will delete all messages. Pass --yes to confirm."
+        )
+
+    if not yes:
+        click.confirm(
+            f"Delete messages matching filters from {cfg.db_path.resolve()}?",
+            abort=True,
+        )
+
+    conn = init_db(cfg.db_path)
+    deleted = delete_messages(conn, spec if not spec.is_empty() else None)
+    conn.close()
+
+    click.echo(f"  {deleted} message(s) deleted.")
 
 
 def main() -> None:

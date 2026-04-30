@@ -6,20 +6,9 @@ from typing import Iterator
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 
+from getemails.config import AccountConfig
 from getemails.filters import FilterSpec
 
-
-@dataclass
-class AccountConfig:
-    name: str
-    provider: str
-    # Gmail
-    credentials_file: str | None = None
-    token_file: str | None = None
-    # IMAP (iCloud, AOL)
-    username: str | None = None
-    password: str | None = None
-    folders: list[str] | None = None  # if set, only search these folders
 
 
 class EmailProvider(ABC):
@@ -33,6 +22,10 @@ class EmailProvider(ABC):
     @abstractmethod
     def disconnect(self) -> None:
         """Close the connection cleanly."""
+
+    @abstractmethod
+    def get_address(self) -> str:
+        """Return the email address for this account."""
 
     @abstractmethod
     def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:

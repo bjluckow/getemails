@@ -25,6 +25,7 @@ class GmailProvider(EmailProvider):
     def __init__(self, account: AccountConfig) -> None:
         super().__init__(account)
         self._service = None
+        self._address: str | None = None
 
     def connect(self) -> None:
         creds = _load_credentials(
@@ -50,6 +51,13 @@ class GmailProvider(EmailProvider):
         assert self._service, "Not connected — call connect() first"
         result = self._service.users().labels().list(userId="me").execute()
         return sorted(label["name"] for label in result.get("labels", []))
+    
+    def get_address(self) -> str:
+        assert self._service
+        if self._address is None:
+            profile = self._service.users().getProfile(userId="me").execute()
+            self._address = profile["emailAddress"]
+        return str(self._address)
 
     def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
         assert self._service, "Not connected — call connect() first"

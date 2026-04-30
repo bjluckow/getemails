@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 import threading
-import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from rich.console import Console
 from rich.text import Text
 
 console = Console(highlight=False, force_terminal=True)
 
-# Docker-compose style colors — assigned round-robin per account
 ACCOUNT_COLORS = [
     "cyan", "green", "magenta", "yellow", "blue",
     "bright_red", "bright_cyan", "bright_green",
@@ -30,22 +28,31 @@ def get_account_color(account_name: str) -> str:
         return _account_colors[account_name]
 
 
-def log(account_name: str, message: str) -> None:
+def _make_line(account_name: str, message: str) -> Text:
     color = get_account_color(account_name)
-    prefix = Text(f"[{account_name}] ", style=f"bold {color}")
-    text = Text(message)
-    console.print(prefix + text)
+    ts = datetime.now().strftime("%H:%M:%S")
+    t = Text()
+    t.append(f"[{account_name}]", style=f"bold {color}")
+    t.append(f" [{ts}] {message}")
+    return t
+
+
+def log(account_name: str, message: str) -> None:
+    console.print(_make_line(account_name, message))
 
 
 @dataclass
 class FolderProgress:
     name: str
     done: int = 0
+    _last_reported: int = field(default=0, repr=False)
+
 
 @dataclass
 class AccountProgress:
     account_name: str
     done: int = 0
+    _last_reported: int = field(default=0, repr=False)
     folders: dict[str, FolderProgress] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -57,23 +64,29 @@ class AccountProgress:
             self.folders[folder].done += n
 
     def print_status(self) -> None:
-        color = get_account_color(self.account_name)
-        name = self.account_name.replace("[", "\\[")
-        prefix = f"[bold {color}][{name}][/bold {color}]"
-        ts = datetime.now().strftime("%H:%M:%S")
-        console.print(f"{prefix} [{ts}] Total: {self.done} processed")
-        for fp in self.folders.values():
-            if fp.done > 0:
-                console.print(f"{prefix} [{ts}] Folder ({fp.name}): {fp.done} processed")
+        with self._lock:
+            new_this_tick = self.done - self._last_reported
+            if new_this_tick <= 0:
+                return
+
+            console.print(_make_line(
+                self.account_name,
+                f"+{new_this_tick} processed (total: {self.done})"
+            ))
+
+            for fp in self.folders.values():
+                delta = fp.done - fp._last_reported
+                if delta > 0:
+                    console.print(_make_line(
+                        self.account_name,
+                        f"Folder ({fp.name}): +{delta} (total: {fp.done})"
+                    ))
+                    fp._last_reported = fp.done
+
+            self._last_reported = self.done
 
 
 class ProgressLogger:
-    """
-    Periodically prints status for all registered accounts.
-    Each account registers itself and updates its own progress.
-    A background thread fires every `interval` seconds.
-    """
-
     def __init__(self, interval: int = 30) -> None:
         self.interval = interval
         self._accounts: dict[str, AccountProgress] = {}
@@ -86,6 +99,10 @@ class ProgressLogger:
         with self._lock:
             self._accounts[account_name] = progress
         return progress
+
+    def deregister(self, account_name: str) -> None:
+        with self._lock:
+            self._accounts.pop(account_name, None)
 
     def start(self) -> None:
         self._thread.start()
