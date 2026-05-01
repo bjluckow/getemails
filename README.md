@@ -1,4 +1,4 @@
-# getemails
+# `emlar` - **em**ai**l** **ar**chiver
 
 Download emails from Gmail, iCloud, and AOL accounts to local `.eml` files.
 Supports filtering by sender, recipient, and date range. Fetches all accounts in parallel.
