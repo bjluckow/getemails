@@ -66,3 +66,38 @@ def write_emls(
         saved += 1
 
     return saved, skipped
+
+def write_mbox(
+    db_path: Path,
+    output_path: Path,
+    filter_spec: FilterSpec,
+) -> tuple[int, int]:
+    """Write messages from the database into a single .mbox file."""
+    import mailbox
+
+    conn = init_db(db_path)
+    rows = query_messages(conn, filter_spec)
+    conn.close()
+
+    mbox = mailbox.mbox(str(output_path))
+    mbox.lock()
+    saved = skipped = 0
+
+    try:
+        seen_uids: set[str] = set()
+        for row in rows:
+            uid = row["message_id"]
+            if uid != "unknown" and uid in seen_uids:
+                skipped += 1
+                continue
+            msg = email.message_from_bytes(bytes(row["raw"]), policy=email.policy.default)
+            if row["folder"] and "X-Folder" not in msg:
+                msg["X-Folder"] = row["folder"]
+            mbox.add(msg)
+            seen_uids.add(uid)
+            saved += 1
+    finally:
+        mbox.flush()
+        mbox.unlock()
+
+    return saved, skipped

@@ -4,18 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "emlar"
-version = "0.1.0"
-description = "Import, archive, and manage emails from Gmail, iCloud, and AOL to .eml files"
+version = "0.2.0"
+description = "A command-line tool for importing, searching, and exporting email archives."
 requires-python = ">=3.11"
 dependencies = [
-    "google-api-python-client>=2.0",
-    "google-auth-httplib2>=0.2",
-    "google-auth-oauthlib>=1.0",
-    "imapclient>=2.3",
-    "python-dotenv>=1.0",
-    "pyyaml>=6.0",
-    "click>=8.1",
-    "rich>=13.0",
+    "click>=8.1"
 ]
 
 [project.scripts]

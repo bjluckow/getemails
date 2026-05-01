@@ -1,68 +1,29 @@
 # `emlar` - **em**ai**l** **ar**chiver
 
-Download emails from Gmail, iCloud, and AOL accounts to local `.eml` files.
-Supports filtering by sender, recipient, and date range. Fetches all accounts in parallel.
+A command-line tool for importing, searching, and exporting email archives.
 
-## Setup
+Stores email in a local SQLite database. Import from `.mbox` or `.eml` files, filter by date and address, export to `.eml`.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-Copy `.env` and fill in your app passwords:
+## Installation
 
 ```bash
-cp .env .env.local   # or just edit .env directly — it's gitignored
+pip install git+https://github.com/bjluckow/emlar.git
 ```
-
-Copy and edit the accounts config:
-
-```bash
-cp config/accounts.example.yaml config/accounts.yaml
-```
-
-### Gmail — OAuth2
-
-1. Create a project in [Google Cloud Console](https://console.cloud.google.com)
-2. Enable the **Gmail API**
-3. Create an OAuth 2.0 **Desktop** client credential and download `credentials.json`
-4. Place it at `config/credentials.json`
-5. On first run, a browser window will open to authorize access — `token_*.json` is saved automatically
-
-### iCloud & AOL — app passwords
-
-- **iCloud**: [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords
-- **AOL**: [login.aol.com](https://login.aol.com) → Account Security → Generate app password
 
 ## Usage
 
 ```bash
-# download all accounts, no filter
-getemails
-
-# filter by date range
-getemails --since 2024-01-01 --until 2024-03-31
-
-# filter by sender or recipient
-getemails --sender boss@company.com --recipient me@gmail.com
-
-# combine filters
-getemails --since 2024-01-01 --sender invoices@stripe.com
-
-# target a single account by name
-getemails --account work-gmail
+emlar --help
+emlar import --help
+emlar export --help
 ```
 
-Output is written to `output/<account-name>/` as `.eml` files:
+## Getting your email
 
-```
-output/
-  work-gmail/
-    2024-03-15_143022__abc123__Re- project update.eml
-  personal-icloud/
-    ...
-```
+- **Gmail** — [Google Takeout](https://takeout.google.com), select Gmail, export as `.mbox`
+- **iCloud** — [privacy.apple.com](https://privacy.apple.com), select Mail
+- **AOL/Yahoo** — [yahoo-mail-dl](https://github.com/bjluckow/yahoo-mail-dl)
 
-Each `.eml` is a self-contained RFC 2822 file — open it in any mail client (Apple Mail, Thunderbird, Outlook). Attachments are preserved inline. Re-running skips already-downloaded messages`.
+## Database
+
+Email is stored as raw RFC 2822 bytes in `~/.emlar/emails.db` by default. Exported `.eml` and `.mbox` files include an `X-Folder` header preserving the source folder. Re-importing the same message is safe — duplicates are silently ignored.
