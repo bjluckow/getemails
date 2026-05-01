@@ -1,5 +1,9 @@
-# credentials & secrets
+# custom
 dev/
+*.eml
+*.mbox
+
+# credentials & secrets
 .env
 config/accounts.yaml
 !config/accounts.example.yaml
