@@ -6,8 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator
 
-from getemails.filters import FilterSpec
-from getemails.sorting import SortingSpec
+from emlar.filters import FilterSpec
+from emlar.sorting import SortingSpec
 
 # --- schema ------------------------------------------------------------------
 
@@ -45,19 +45,7 @@ _INSERT_MESSAGE = """
 """
 
 # Base SELECT — WHERE clauses appended dynamically by query_messages
-_SELECT_MESSAGES = """
-    SELECT message_id, account, folder, date, subject, from_addr, to_addr, cc_addr, bcc_addr, raw
-    FROM messages
-"""
-
-_DELETE_MESSAGES = """
-    DELETE FROM messages
-    WHERE message_id IN (
-        SELECT message_id FROM messages
-        WHERE 1=1
-        {where_clauses}
-    )
-"""
+_SELECT_MESSAGES = "SELECT message_id, account, folder, date, subject, from_addr, to_addr, cc_addr, bcc_addr, raw FROM messages"
 
 # --- connection --------------------------------------------------------------
 
@@ -110,7 +98,7 @@ def insert_from_stream(
     Insert messages from an iterator into the DB.
     Returns (inserted, filtered) counts.
     """
-    from getemails.email_utils import extract_addrs, message_date, message_uid
+    from emlar.email_utils import extract_addrs, message_date, message_uid
     inserted = filtered = 0
     for msg in messages:
         if spec and not spec.is_empty() and not spec.matches(msg):
@@ -136,96 +124,29 @@ def insert_from_stream(
 
 # --- reads -------------------------------------------------------------------
 
-def query_messages(
-    conn: sqlite3.Connection,
-    filter_spec: FilterSpec | None = None,
-    sorting_spec: SortingSpec | None = None,
-) -> list[sqlite3.Row]:
-    """
-    Query messages matching spec, ordered by sorting_spec.
-    Returns a list of Row objects with named column access.
-    """
+def _build_where(spec: FilterSpec | None) -> tuple[str, list]:
+    """Build a WHERE clause and params list from a FilterSpec."""
     clauses: list[str] = []
-    params: list[str] = []
-
-    if filter_spec:
-        if filter_spec.since:
-            clauses.append("date >= ?")
-            params.append(filter_spec.since.strftime("%Y-%m-%d"))
-        if filter_spec.until:
-            clauses.append("date < ?")
-            params.append(filter_spec.until.strftime("%Y-%m-%d"))
-        if filter_spec.senders:
-            sender_clauses = [f"from_addr LIKE ?" for _ in filter_spec.senders]
-            clauses.append(f"({' OR '.join(sender_clauses)})")
-            params.extend(f"%{s.lower()}%" for s in filter_spec.senders)
-        if filter_spec.recipients:
-            recipient_clauses = [f"to_addr LIKE ?" for _ in filter_spec.recipients]
-            clauses.append(f"({' OR '.join(recipient_clauses)})")
-            params.extend(f"%{r.lower()}%" for r in filter_spec.recipients)
-        if filter_spec.cc:
-            cc_clauses = [f"cc_addr LIKE ?" for _ in filter_spec.cc]
-            clauses.append(f"({' OR '.join(cc_clauses)})")
-            params.extend(f"%{c.lower()}%" for c in filter_spec.cc)
-        if filter_spec.bcc:
-            bcc_clauses = [f"bcc_addr LIKE ?" for _ in filter_spec.bcc]
-            clauses.append(f"({' OR '.join(bcc_clauses)})")
-            params.extend(f"%{b.lower()}%" for b in filter_spec.bcc)
-        if filter_spec.any_addresses:
-            any_clauses = []
-            for addr in filter_spec.any_addresses:
-                any_clauses.append(
-                    "(from_addr LIKE ? OR to_addr LIKE ? OR cc_addr LIKE ? OR bcc_addr LIKE ?)"
-                )
-                params.extend([f"%{addr.lower()}%"] * 4)
-            clauses.append(f"({' OR '.join(any_clauses)})")
-
-    sql = _SELECT_MESSAGES
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-
-    # Order by date first, then folder and subject for stable output
-    order_parts = ["date"]
-    if sorting_spec and sorting_spec.groupby_folder:
-        order_parts.append("folder")
-    order_parts.append("subject")
-    sql += f" ORDER BY {', '.join(order_parts)}"
-
-    return conn.execute(sql, params).fetchall()
-
-def delete_messages(
-    conn: sqlite3.Connection,
-    spec: FilterSpec | None = None,
-) -> int:
-    """
-    Delete messages matching spec from the database.
-    Returns the number of rows deleted.
-    """
-    clauses: list[str] = []
-    params: list[str] = []
+    params: list = []
 
     if spec:
         if spec.since:
-            clauses.append("AND date >= ?")
+            clauses.append("date >= ?")
             params.append(spec.since.strftime("%Y-%m-%d"))
         if spec.until:
-            clauses.append("AND date < ?")
+            clauses.append("date < ?")
             params.append(spec.until.strftime("%Y-%m-%d"))
         if spec.senders:
-            sender_clauses = ["from_addr LIKE ?" for _ in spec.senders]
-            clauses.append(f"AND ({' OR '.join(sender_clauses)})")
+            clauses.append(f"({' OR '.join('from_addr LIKE ?' for _ in spec.senders)})")
             params.extend(f"%{s.lower()}%" for s in spec.senders)
         if spec.recipients:
-            recipient_clauses = ["to_addr LIKE ?" for _ in spec.recipients]
-            clauses.append(f"AND ({' OR '.join(recipient_clauses)})")
+            clauses.append(f"({' OR '.join('to_addr LIKE ?' for _ in spec.recipients)})")
             params.extend(f"%{r.lower()}%" for r in spec.recipients)
         if spec.cc:
-            cc_clauses = ["cc_addr LIKE ?" for _ in spec.cc]
-            clauses.append(f"AND ({' OR '.join(cc_clauses)})")
+            clauses.append(f"({' OR '.join('cc_addr LIKE ?' for _ in spec.cc)})")
             params.extend(f"%{c.lower()}%" for c in spec.cc)
         if spec.bcc:
-            bcc_clauses = ["bcc_addr LIKE ?" for _ in spec.bcc]
-            clauses.append(f"AND ({' OR '.join(bcc_clauses)})")
+            clauses.append(f"({' OR '.join('bcc_addr LIKE ?' for _ in spec.bcc)})")
             params.extend(f"%{b.lower()}%" for b in spec.bcc)
         if spec.any_addresses:
             any_clauses = []
@@ -234,17 +155,33 @@ def delete_messages(
                     "(from_addr LIKE ? OR to_addr LIKE ? OR cc_addr LIKE ? OR bcc_addr LIKE ?)"
                 )
                 params.extend([f"%{addr.lower()}%"] * 4)
-            clauses.append(f"AND ({' OR '.join(any_clauses)})")
+            clauses.append(f"({' OR '.join(any_clauses)})")
 
-    sql = f"""
-        DELETE FROM messages
-        WHERE message_id IN (
-            SELECT message_id FROM messages
-            WHERE 1=1
-            {' '.join(clauses)}
-        )
-    """
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
 
+
+def query_messages(
+    conn: sqlite3.Connection,
+    spec: FilterSpec | None = None,
+    sorting_spec: SortingSpec | None = None,
+) -> list[sqlite3.Row]:
+    where, params = _build_where(spec)
+
+    order_parts = ["date"]
+    if sorting_spec and sorting_spec.groupby_folder:
+        order_parts.append("folder")
+    order_parts.append("subject")
+
+    sql = f"{_SELECT_MESSAGES}{where} ORDER BY {', '.join(order_parts)}"
+    return conn.execute(sql, params).fetchall()
+
+def delete_messages(
+    conn: sqlite3.Connection,
+    spec: FilterSpec | None = None,
+) -> int:
+    where, params = _build_where(spec)
+    sql = f"DELETE FROM messages{where}"
     cursor = conn.execute(sql, params)
     conn.commit()
     return cursor.rowcount
@@ -289,29 +226,34 @@ _GET_STATS_BY_FOLDER = """
     ORDER BY account, count DESC
 """
 
-def get_stats(conn: sqlite3.Connection) -> list[AccountStats]:
-    """Return per-account stats with folder breakdowns."""
-    account_rows = conn.execute(_GET_STATS_BY_ACCOUNT).fetchall()
-    folder_rows = conn.execute(_GET_STATS_BY_FOLDER).fetchall()
+def get_stats(
+    conn: sqlite3.Connection,
+    spec: FilterSpec | None = None,
+) -> list[AccountStats]:
+    where, params = _build_where(spec)
+
+    account_rows = conn.execute(
+        f"SELECT account, COUNT(*) as count, MIN(date) as earliest, MAX(date) as latest "
+        f"FROM messages{where} GROUP BY account ORDER BY count DESC",
+        params,
+    ).fetchall()
+
+    folder_rows = conn.execute(
+        f"SELECT account, folder, COUNT(*) as count, MIN(date) as earliest, MAX(date) as latest "
+        f"FROM messages{where} GROUP BY account, folder ORDER BY account, count DESC",
+        params,
+    ).fetchall()
 
     folders_by_account: dict[str, list[FolderStats]] = {}
     for row in folder_rows:
         folders_by_account.setdefault(row["account"], []).append(
-            FolderStats(
-                folder=row["folder"],
-                count=row["count"],
-                earliest=row["earliest"],
-                latest=row["latest"],
-            )
+            FolderStats(folder=row["folder"], count=row["count"],
+                        earliest=row["earliest"], latest=row["latest"])
         )
 
     return [
-        AccountStats(
-            account=row["account"],
-            count=row["count"],
-            earliest=row["earliest"],
-            latest=row["latest"],
-            folders=folders_by_account.get(row["account"], []),
-        )
+        AccountStats(account=row["account"], count=row["count"],
+                     earliest=row["earliest"], latest=row["latest"],
+                     folders=folders_by_account.get(row["account"], []))
         for row in account_rows
     ]

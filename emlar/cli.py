@@ -8,14 +8,14 @@ from pathlib import Path
 
 import click
 
-from getemails.config import Config, DEFAULT_CONFIG_PATH
-from getemails.db import init_db, insert_from_stream, get_stats, delete_messages
-from getemails.email_utils import stream_emls, stream_mbox
-from getemails.fetch import fetch_all, fetch_folders
-from getemails.filters import FilterSpec
-from getemails.writer import write_emls
-from getemails.logger import ProgressLogger, log
-from getemails.sorting import SortingSpec
+from emlar.config import Config, DEFAULT_CONFIG_PATH
+from emlar.db import init_db, insert_from_stream, get_stats, delete_messages
+from emlar.email_utils import stream_emls, stream_mbox
+from emlar.fetch import fetch_all, fetch_folders
+from emlar.filters import FilterSpec
+from emlar.writer import write_emls
+from emlar.logger import ProgressLogger, log
+from emlar.sorting import SortingSpec
 
 
 def _make_spec(since, until, senders, recipients, cc, bcc, any_addresses=(), use_today=False) -> FilterSpec:
@@ -127,7 +127,7 @@ def fetch(config_path, account_names, log_interval,
 
     def _handle_interrupt(sig, frame):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-        log("getemails", "Interrupted — saving progress and exiting...")
+        log("emlar", "Interrupted — saving progress and exiting...")
         progress_logger.stop()
         sys.exit(0)
 
@@ -166,28 +166,20 @@ def folders(config_path, account_names):
 
 
 @cli.command(name="local")
-@click.argument("input_path", type=click.Path(exists=True), required=False, default=None)
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
               type=click.Path(exists=True), help="Path to accounts config.")
 @click.option("--output", "output_dir", default=None, type=click.Path(),
               help="Output directory (default: output/<query>).")
 @_sorting_options
 @_filter_options
-def local(input_path, config_path, output_dir, 
-          group_by_date, group_by_folder,group_by_thread,
+def local(config_path, output_dir,
+          group_by_date, group_by_folder, group_by_thread,
           since, until, use_today, senders, recipients, cc, bcc, any_addresses):
-    """Filter .eml files or an .mbox file into a new output directory.
-
-    INPUT_PATH is either a directory of .eml files or an .mbox file (with --mbox).
-    """
+    """Write .eml files from the database into an output directory."""
     if use_today and (since or until):
         raise click.UsageError("--today cannot be combined with --since or --until.")
-    
+
     cfg = Config.load(config_path=config_path)
-
-    # only use input_path if explicitly provided (e.g. for mbox)
-    resolved_input = Path(input_path) if input_path else cfg.db_path.parent
-
     filter_spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
     out_dir = Path(output_dir) if output_dir else cfg.output_dir / _build_folder_name(filter_spec)
     sorting_spec = SortingSpec(
@@ -198,8 +190,8 @@ def local(input_path, config_path, output_dir,
 
     click.echo(f"Output directory: {out_dir}\n")
 
-    saved, skipped = write_emls(resolved_input, out_dir, 
-        filter_spec=filter_spec, sorting_spec=sorting_spec, 
+    saved, skipped = write_emls(cfg.db_path, out_dir,
+        filter_spec=filter_spec, sorting_spec=sorting_spec,
     )
     click.echo(f"  {saved} saved, {skipped} skipped")
     click.echo("\nDone.")
@@ -242,23 +234,28 @@ def import_cmd(input_path, account, config_path, import_folder, recursive,
 @cli.command(name="stats")
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), show_default=True,
               type=click.Path(exists=True), help="Path to accounts config.")
-def stats(config_path):
+@_filter_options
+def stats(config_path, since, until, use_today, senders, recipients, cc, bcc, any_addresses):
     """Show database stats and email counts per account and folder."""
+    if use_today and (since or until):
+        raise click.UsageError("--today cannot be combined with --since or --until.")
+
     cfg = Config.load(config_path=config_path)
+    spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
 
     click.echo(f"Config:   {cfg.cfg_path.resolve()}")
     click.echo(f"Database: {cfg.db_path.resolve()}")
 
     if not cfg.db_path.exists():
-        click.echo("\nNo database found — run `getemails fetch` first.")
+        click.echo("\nNo database found -- fetch emails first.")
         return
 
     conn = init_db(cfg.db_path)
-    account_stats = get_stats(conn)
+    account_stats = get_stats(conn, spec if not spec.is_empty() else None)
     conn.close()
 
     if not account_stats:
-        click.echo("\nDatabase is empty.")
+        click.echo("\nNo results.")
         return
 
     header = f"\n{'Address':<40} {'Emails':>8}  {'Earliest':<12}  {'Latest':<12}"

@@ -4,23 +4,23 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from getemails.db import init_db, insert_message
-from getemails.email_utils import extract_addrs, message_date, message_uid
-from getemails.filters import FilterSpec
-from getemails.logger import AccountProgress, ProgressLogger, log
-from getemails.providers.base import AccountConfig, EmailProvider
+from emlar.db import init_db, insert_message
+from emlar.email_utils import extract_addrs, message_date, message_uid
+from emlar.filters import FilterSpec
+from emlar.logger import AccountProgress, ProgressLogger, log
+from emlar.providers.base import AccountConfig, EmailProvider
 
 
 def make_provider(account: AccountConfig) -> EmailProvider:
     match account.provider:
         case "gmail":
-            from getemails.providers.gmail import GmailProvider
+            from emlar.providers.gmail import GmailProvider
             return GmailProvider(account)
         case "icloud":
-            from getemails.providers.icloud import iCloudProvider
+            from emlar.providers.icloud import iCloudProvider
             return iCloudProvider(account)
         case "aol":
-            from getemails.providers.aol import AOLProvider
+            from emlar.providers.aol import AOLProvider
             return AOLProvider(account)
         case _:
             raise ValueError(f"Unknown provider: {account.provider!r}")
@@ -29,8 +29,8 @@ def make_provider(account: AccountConfig) -> EmailProvider:
 def fetch_folders(account: AccountConfig) -> list[str]:
     provider = make_provider(account)
     with provider:
-        from getemails.providers.imap import IMAPProvider
-        from getemails.providers.gmail import GmailProvider
+        from emlar.providers.imap import IMAPProvider
+        from emlar.providers.gmail import GmailProvider
         if isinstance(provider, IMAPProvider):
             return provider._list_folders()
         elif isinstance(provider, GmailProvider):

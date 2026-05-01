@@ -5,10 +5,10 @@ import email.policy
 from email.message import EmailMessage
 from pathlib import Path
 
-from getemails.sorting import SortingSpec
-from getemails.db import init_db, query_messages
-from getemails.email_utils import message_filename, message_uid, slugify, stream_emls, stream_mbox, thread_id, thread_subject, message_date
-from getemails.filters import FilterSpec
+from emlar.sorting import SortingSpec
+from emlar.db import init_db, query_messages
+from emlar.email_utils import message_filename, message_uid, slugify, stream_emls, stream_mbox, thread_id, thread_subject, message_date
+from emlar.filters import FilterSpec
 
 
 def _resolve_target_dir(

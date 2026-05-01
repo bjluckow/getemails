@@ -15,8 +15,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from getemails.filters import FilterSpec
-from getemails.providers.base import AccountConfig, EmailProvider
+from emlar.filters import FilterSpec
+from emlar.providers.base import AccountConfig, EmailProvider
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 

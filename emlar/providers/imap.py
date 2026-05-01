@@ -8,11 +8,11 @@ from typing import Generator, Iterator
 
 from imapclient import IMAPClient
 
-from getemails.config import AccountConfig
-from getemails.filters import FilterSpec
-from getemails.providers.base import EmailProvider
+from emlar.config import AccountConfig
+from emlar.filters import FilterSpec
+from emlar.providers.base import EmailProvider
 
-UID_BATCH_SIZE = 500
+UID_BATCH_SIZE = 100
 
 # iCloud requires BODY[] instead of RFC822 — we detect this per-server
 # by attempting RFC822 on the first fetch and falling back if needed.

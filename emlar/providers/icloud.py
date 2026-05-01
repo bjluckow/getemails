@@ -1,6 +1,6 @@
 from __future__ import annotations
  
-from getemails.providers.imap import IMAPProvider
+from emlar.providers.imap import IMAPProvider
  
  
 class iCloudProvider(IMAPProvider):

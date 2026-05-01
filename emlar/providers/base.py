@@ -6,8 +6,8 @@ from typing import Iterator
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 
-from getemails.config import AccountConfig
-from getemails.filters import FilterSpec
+from emlar.config import AccountConfig
+from emlar.filters import FilterSpec
 
 
 

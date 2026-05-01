@@ -6,21 +6,21 @@ from datetime import date, timedelta
 from email.message import EmailMessage
 from typing import Iterator
 
-from getemails.filters import FilterSpec
-from getemails.providers.imap import IMAPProvider, build_imap_criteria, uid_batches
+from emlar.filters import FilterSpec
+from emlar.providers.imap import IMAPProvider, build_imap_criteria, uid_batches
 
 # AOL/Yahoo enforce MESSAGELIMIT=500 per SEARCH command.
 # We split the date range into windows small enough that each window's
 # results stay comfortably under that cap.
 AOL_WINDOW_DAYS = 30
-AOL_FETCH_BATCH = 500
+AOL_FETCH_BATCH = 100
 
 # Folders to skip when archiving — deleted mail and server internals.
 # Adjust in accounts.yaml via the `folders` key to override entirely.
 
 
 class AOLProvider(IMAPProvider):
-    HOST = "imap.aol.com"
+    HOST = "export.imap.aol.com"
     PORT = 993
 
     def fetch_emails(self, spec: FilterSpec) -> Iterator[tuple[str, EmailMessage]]:
@@ -51,9 +51,12 @@ class AOLProvider(IMAPProvider):
                 criteria = build_imap_criteria(window_spec)
                 uids: list[int] = self._client.search(criteria)  # type: ignore[arg-type]
                 folder_uids.extend(uids)
+                print(f"  {self.account.name}/{folder} [{window_since} → {window_until}]: {len(uids)} UIDs", flush=True)
 
             if not folder_uids:
                 continue
+
+            print(f"  {self.account.name}/{folder}: {len(folder_uids)} total UIDs, fetching...", flush=True)
 
             for batch in uid_batches(folder_uids, AOL_FETCH_BATCH):
                 for msg in self._fetch_batch(batch):

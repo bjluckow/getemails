@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "getemails"
+name = "emlar"
 version = "0.1.0"
-description = "Download and archive emails from Gmail, iCloud, and AOL to .eml files"
+description = "Import, archive, and manage emails from Gmail, iCloud, and AOL to .eml files"
 requires-python = ">=3.11"
 dependencies = [
     "google-api-python-client>=2.0",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-getemails = "getemails.cli:main"
+emlar = "emlar.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["getemails"]
+packages = ["emlar"]
