@@ -22,11 +22,15 @@ def message_uid(msg: EmailMessage) -> str:
     return re.sub(r"[<>\s]", "", mid) or "unknown"
 
 
-def message_date(msg: EmailMessage) -> str:
-    """Return YYYY-MM-DD string for the message date."""
+def message_date(msg: EmailMessage, granularity: str = "day") -> str:
     try:
         dt = parsedate_to_datetime(msg.get("Date", ""))
-        return dt.strftime("%Y-%m-%d")
+        if granularity == "year":
+            return dt.strftime("%Y")
+        elif granularity == "month":
+            return dt.strftime("%Y-%m")
+        else:
+            return dt.strftime("%Y-%m-%d")
     except Exception:
         return "0000-00-00"
 
@@ -103,3 +107,24 @@ def stream_mbox(mbox_path: Path) -> Iterator[EmailMessage]:
             )
     finally:
         mbox.close()
+
+# Gmail utils
+
+_GMAIL_LABEL_PRIORITY = ["Inbox", "Sent", "Drafts", "Spam", "Trash", "Starred", "Archived"]
+
+def normalize_gmail_labels(raw_labels: str) -> str:
+    """
+    Pick the most meaningful single folder name from a comma-separated
+    X-Gmail-Labels string.
+    """
+    labels = {l.strip() for l in raw_labels.split(",")}
+    for candidate in _GMAIL_LABEL_PRIORITY:
+        if candidate in labels:
+            return candidate.lower()
+    # Check for custom labels (not system labels)
+    custom = {l for l in labels if not l.startswith("IMAP_") 
+              and not l.startswith("Category ")
+              and l not in ("Opened", "Unread", "Important", "[Gmail]All Mail")}
+    if custom:
+        return next(iter(custom)).lower()
+    return "inbox"

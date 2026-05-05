@@ -87,6 +87,8 @@ def insert_message(
     conn.commit()
 
 
+BATCH_SIZE = 500
+
 def insert_from_stream(
     conn: sqlite3.Connection,
     messages: Iterator[EmailMessage],
@@ -94,31 +96,37 @@ def insert_from_stream(
     folder: str,
     spec: FilterSpec | None = None,
 ) -> tuple[int, int]:
-    """
-    Insert messages from an iterator into the DB.
-    Returns (inserted, filtered) counts.
-    """
     from emlar.email_utils import extract_addrs, message_date, message_uid
     inserted = filtered = 0
+
     for msg in messages:
         if spec and not spec.is_empty() and not spec.matches(msg):
             filtered += 1
             continue
         uid = message_uid(msg)
-        insert_message(
-            conn,
-            message_id=uid,
-            account=account,
-            folder=folder,
-            date=message_date(msg),
-            subject=msg.get("Subject"),
-            from_addr=extract_addrs(msg, "From"),
-            to_addr=extract_addrs(msg, "To"),
-            cc_addr=extract_addrs(msg, "Cc"),
-            bcc_addr=extract_addrs(msg, "Bcc"),
-            raw=msg.as_bytes(),
-        )
+        
+        raw_folder = msg.get("X-Folder") or msg.get("X-Gmail-Labels") or folder
+        if msg.get("X-Gmail-Labels"):
+            from emlar.email_utils import normalize_gmail_labels
+            msg_folder = normalize_gmail_labels(raw_folder)
+        else:
+            msg_folder = raw_folder
+
+        conn.execute(_INSERT_MESSAGE, (
+            uid, account, msg_folder,
+            message_date(msg),
+            msg.get("Subject"),
+            extract_addrs(msg, "From"),
+            extract_addrs(msg, "To"),
+            extract_addrs(msg, "Cc"),
+            extract_addrs(msg, "Bcc"),
+            msg.as_bytes(),
+        ))
         inserted += 1
+        if inserted % BATCH_SIZE == 0:
+            conn.commit()
+
+    conn.commit()  # final commit for remainder
     return inserted, filtered
 
 

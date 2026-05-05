@@ -21,7 +21,7 @@ def _resolve_target_dir(
     target = output_dir
 
     if sorting_spec.groupby_date:
-        target = target / message_date(msg)
+        target = target / message_date(msg, granularity=sorting_spec.groupby_date.value)
     if sorting_spec.groupby_folder and folder:
         target = target / slugify(folder)
     if sorting_spec.groupby_thread:

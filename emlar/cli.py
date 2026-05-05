@@ -10,7 +10,7 @@ from emlar.db import init_db, insert_from_stream, get_stats, delete_messages
 from emlar.email_utils import stream_emls, stream_mbox
 from emlar.filters import FilterSpec
 from emlar.writer import write_emls, write_mbox
-from emlar.sorting import SortingSpec
+from emlar.sorting import DateGrouping, SortingSpec
 
 DEFAULT_DB_PATH = Path.home() / ".emlar" / "emails.db"
 
@@ -51,11 +51,12 @@ def _filter_options(f):
 
 
 def _sorting_options(f):
-    f = click.option("--group-by-date", is_flag=True, default=False,
-                     help="Group emails into subdirectories by date (YYYY-MM-DD).")(f)
+    f = click.option("--group-by-date",
+                     type=click.Choice(["day", "month", "year"]), default=None,
+                     help="Group emails by date granularity: day, month, or year.")(f)
     f = click.option("--group-by-folder", is_flag=True, default=False,
                      help="Group emails into subdirectories by source folder.")(f)
-    f = click.option("--group-by-thread", is_flag=True, default=False, 
+    f = click.option("--group-by-thread", is_flag=True, default=False,
                      help="Group emails into subdirectories by thread subject.")(f)
     return f
 
@@ -102,7 +103,7 @@ def import_cmd(input_path, db_path, label, import_folder, recursive,
 @cli.command(name="export")
 @click.option("--db", "db_path", default=DEFAULT_DB_PATH, type=click.Path(path_type=Path),
               help="Path to database.")
-@click.option("--out", "out_dir", required=True, type=click.Path(),
+@click.option("--out", "out_dir", required=True, type=click.Path(path_type=Path),
               help="Output directory.")
 @click.option("--mbox", "use_mbox", is_flag=True, default=False,
               help="Export as a single .mbox file instead of individual .eml files.")
@@ -120,7 +121,7 @@ def export(db_path, out_dir, use_mbox,
 
     filter_spec = _make_spec(since, until, senders, recipients, cc, bcc, any_addresses, use_today=use_today)
     sorting_spec = SortingSpec(
-        groupby_date=group_by_date,
+        groupby_date=DateGrouping(group_by_date) if group_by_date else None,
         groupby_folder=group_by_folder,
         groupby_thread=group_by_thread,
     )
